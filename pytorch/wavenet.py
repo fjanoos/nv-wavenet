@@ -64,18 +64,23 @@ class WaveNet(torch.nn.Module):
         
         self.n_layers = n_layers
         self.max_dilation = max_dilation
+        # FJ -> POut for the "wavelet" convolutions
         self.n_residual_channels = n_residual_channels 
+        # FJ -> Pout for the final layer
         self.n_out_channels = n_out_channels
+        # FJ -> combine residual and skip networks
         self.cond_layers = Conv(n_cond_channels, 2*n_residual_channels*n_layers,
                                 w_init_gain='tanh')
         self.dilate_layers = torch.nn.ModuleList()
         self.res_layers = torch.nn.ModuleList()
         self.skip_layers = torch.nn.ModuleList()
-        
+        # FJ -> embed each input channel to an n_residual_channel vector space?
         self.embed = torch.nn.Embedding(n_in_channels,
                                              n_residual_channels)
+        # FJ -> final layer for the skip network of kernel lenght 1
         self.conv_out = Conv(n_skip_channels, n_out_channels,
                                  bias=False, w_init_gain='relu')
+        # FJ -> another layer of kernel lenght 1
         self.conv_end = Conv(n_out_channels, n_out_channels,
                                  bias=False, w_init_gain='linear')
 
@@ -83,6 +88,7 @@ class WaveNet(torch.nn.Module):
         for i in range(n_layers):
             dilation = 2 ** (i % loop_factor)
             
+            # FJ intermediate dilated convolutions on the residual network
             # Kernel size is 2 in nv-wavenet
             in_layer = Conv(n_residual_channels, 2*n_residual_channels,
                                 kernel_size=2, dilation=dilation,
@@ -91,10 +97,11 @@ class WaveNet(torch.nn.Module):
 
             # last one is not necessary
             if i < n_layers - 1:
+                #FJ Some sort of residual layer of lenght 1 ?
                 res_layer = Conv(n_residual_channels, n_residual_channels,
                                      w_init_gain='linear')
                 self.res_layers.append(res_layer)
-
+            # FJ also of length 1 ?
             skip_layer = Conv(n_residual_channels, n_skip_channels,
                                   w_init_gain='relu')
             self.skip_layers.append(skip_layer)
@@ -102,15 +109,18 @@ class WaveNet(torch.nn.Module):
     def forward(self, forward_input):
         features = forward_input[0]
         forward_input = forward_input[1]
+        # FJ  upsample the data - what is thsi ?
+        # torch.nn.ConvTranspose1d(n_cond_channels, n_cond_channels, upsamp_window, upsamp_stride)
         cond_input = self.upsample(features)
 
         assert(cond_input.size(2) >= forward_input.size(1))
         if cond_input.size(2) > forward_input.size(1):
             cond_input = cond_input[:, :, :forward_input.size(1)]
-       
+        # FJ -> torch.nn.Embedding(n_in_channels, n_residual_channels)
+        # map from n (0 ... n_input) -> a vector space of dim n_residual_channel. What the fuck ??
         forward_input = self.embed(forward_input.long())
         forward_input = forward_input.transpose(1, 2)
-       
+        # Conv(n_cond_channels, 2*n_residual_channels*n_layers, w_init_gain='tanh')
         cond_acts = self.cond_layers(cond_input)
         cond_acts = cond_acts.view(cond_acts.size(0), self.n_layers, -1, cond_acts.size(2))
         for i in range(self.n_layers):
