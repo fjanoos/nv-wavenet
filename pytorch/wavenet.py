@@ -56,7 +56,7 @@ class WaveNet(torch.nn.Module):
                  n_residual_channels, n_skip_channels, n_out_channels,
                  n_cond_channels, upsamp_window, upsamp_stride):
         super(WaveNet, self).__init__()
-
+        # fj -not sure what this is 
         self.upsample = torch.nn.ConvTranspose1d(n_cond_channels,
                                                  n_cond_channels,
                                                  upsamp_window,
