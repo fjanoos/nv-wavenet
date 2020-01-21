@@ -73,7 +73,7 @@ class WaveNet(torch.nn.Module):
         self.dilate_layers = torch.nn.ModuleList()
         self.res_layers = torch.nn.ModuleList()
         self.skip_layers = torch.nn.ModuleList()
-        # FJ for input embedding
+        # FJ Embed each input channel number into a vector space ? 
         self.embed = torch.nn.Embedding(n_in_channels,
                                              n_residual_channels)
         # FJ integrate the skip connections into the output. Plain FFN  (kernel=1)
@@ -111,29 +111,36 @@ class WaveNet(torch.nn.Module):
     def forward(self, forward_input):
         features = forward_input[0]
         forward_input = forward_input[1]
-        # FJ - do some arbitrary upsampling ...
+        # FJ - do some arbitrary upsampling ... n_cond_channels output
         cond_input = self.upsample(features)
-
+        # FJ make cond_input match forward_input size
         assert(cond_input.size(2) >= forward_input.size(1))
         if cond_input.size(2) > forward_input.size(1):
             cond_input = cond_input[:, :, :forward_input.size(1)]
        
-        # do an embedding of the input
+        # FJ do an embedding of the input features into a n_resid_channels vector space. Why ?
         forward_input = self.embed(forward_input.long())
         forward_input = forward_input.transpose(1, 2)
        
+        # FJ ; n_cond_channels to  2*n_residual_channels*n_layers tanh gated FFN
         cond_acts = self.cond_layers(cond_input)
+        # resize this into batch x num_layers x 
         cond_acts = cond_acts.view(cond_acts.size(0), self.n_layers, -1, cond_acts.size(2))
         for i in range(self.n_layers):
+            # FJ dilated convolution
             in_act = self.dilate_layers[i](forward_input)
+            # FJ merge in the gating for this layer. What is this gating ?
             in_act = in_act + cond_acts[:,i,:,:]
             t_act = torch.nn.functional.tanh(in_act[:, :self.n_residual_channels, :])
             s_act = torch.nn.functional.sigmoid(in_act[:, self.n_residual_channels:, :])
+            # FJ: output for dilated later is out = tanh(out[:last])*sigmoid(out[last]) ... what the what?
             acts = t_act * s_act
+            # FJ: do the residual layer via plain FFN 
             if i < len(self.res_layers):
                 res_acts = self.res_layers[i](acts)
+            # FJ: the skip connection - merging residual connection into the highway.
             forward_input = res_acts + forward_input
-
+            # compute the skip network for propagation
             if i == 0:
                 output = self.skip_layers[i](acts)
             else:
