@@ -66,16 +66,20 @@ class WaveNet(torch.nn.Module):
         self.max_dilation = max_dilation
         self.n_residual_channels = n_residual_channels 
         self.n_out_channels = n_out_channels
+        # FJ: convert the input from upsample into some sort of gating network.
+        # Plain linear network (len=1)
         self.cond_layers = Conv(n_cond_channels, 2*n_residual_channels*n_layers,
                                 w_init_gain='tanh')
         self.dilate_layers = torch.nn.ModuleList()
         self.res_layers = torch.nn.ModuleList()
         self.skip_layers = torch.nn.ModuleList()
-        
+        # FJ for input embedding
         self.embed = torch.nn.Embedding(n_in_channels,
                                              n_residual_channels)
+        # FJ integrate the skip connections into the output. Plain FFN  (kernel=1)
         self.conv_out = Conv(n_skip_channels, n_out_channels,
                                  bias=False, w_init_gain='relu')
+        # FJ another final layer for skip connections. Plain linear FNN (kernel=1)
         self.conv_end = Conv(n_out_channels, n_out_channels,
                                  bias=False, w_init_gain='linear')
 
@@ -84,6 +88,8 @@ class WaveNet(torch.nn.Module):
             dilation = 2 ** (i % loop_factor)
             
             # Kernel size is 2 in nv-wavenet
+            # FJ the intermediate dilated convolution layers. Takes input of
+            # n_resid_channels and produces 2 x n_resid_channels
             in_layer = Conv(n_residual_channels, 2*n_residual_channels,
                                 kernel_size=2, dilation=dilation,
                                 w_init_gain='tanh', is_causal=True)
@@ -91,10 +97,13 @@ class WaveNet(torch.nn.Module):
 
             # last one is not necessary
             if i < n_layers - 1:
+                # FJ - plain linear FFN consuming half the 2 x resid_channels
+                # proced by in_layer as input for the next in_layer
                 res_layer = Conv(n_residual_channels, n_residual_channels,
                                      w_init_gain='linear')
                 self.res_layers.append(res_layer)
-
+            # FJ skip linear FFN consuming the other half of the 2x resid_channles 
+            # of in_layer for input the skip network (i.e. conv_out)
             skip_layer = Conv(n_residual_channels, n_skip_channels,
                                   w_init_gain='relu')
             self.skip_layers.append(skip_layer)
@@ -102,12 +111,14 @@ class WaveNet(torch.nn.Module):
     def forward(self, forward_input):
         features = forward_input[0]
         forward_input = forward_input[1]
+        # FJ - do some arbitrary upsampling ...
         cond_input = self.upsample(features)
 
         assert(cond_input.size(2) >= forward_input.size(1))
         if cond_input.size(2) > forward_input.size(1):
             cond_input = cond_input[:, :, :forward_input.size(1)]
        
+        # do an embedding of the input
         forward_input = self.embed(forward_input.long())
         forward_input = forward_input.transpose(1, 2)
        
