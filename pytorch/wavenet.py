@@ -66,46 +66,39 @@ class WaveNet(torch.nn.Module):
         self.max_dilation = max_dilation
         self.n_residual_channels = n_residual_channels 
         self.n_out_channels = n_out_channels
+        # FJ: some sort of conditioner network
         # FJ: convert the input from upsample into some sort of gating network.
         # Plain linear network (len=1)
-        self.cond_layers = Conv(n_cond_channels, 2*n_residual_channels*n_layers,
-                                w_init_gain='tanh')
+        self.cond_layers = Conv(n_cond_channels, 2*n_residual_channels*n_layers, w_init_gain='tanh')
         self.dilate_layers = torch.nn.ModuleList()
         self.res_layers = torch.nn.ModuleList()
         self.skip_layers = torch.nn.ModuleList()
         # FJ Embed each input channel number into a vector space ? 
-        self.embed = torch.nn.Embedding(n_in_channels,
-                                             n_residual_channels)
+        self.embed = torch.nn.Embedding(n_in_channels, n_residual_channels)
         # FJ integrate the skip connections into the output. Plain FFN  (kernel=1)
-        self.conv_out = Conv(n_skip_channels, n_out_channels,
-                                 bias=False, w_init_gain='relu')
+        self.conv_out = Conv(n_skip_channels, n_out_channels, bias=False, w_init_gain='relu')
         # FJ another final layer for skip connections. Plain linear FNN (kernel=1)
-        self.conv_end = Conv(n_out_channels, n_out_channels,
-                                 bias=False, w_init_gain='linear')
+        self.conv_end = Conv(n_out_channels, n_out_channels, bias=False, w_init_gain='linear')
 
         loop_factor = math.floor(math.log2(max_dilation)) + 1
         for i in range(n_layers):
-            dilation = 2 ** (i % loop_factor)
-            
-            # Kernel size is 2 in nv-wavenet
+            dilation = 2 ** (i % loop_factor)                        
             # FJ the intermediate dilated convolution layers. Takes input of
-            # n_resid_channels and produces 2 x n_resid_channels
-            in_layer = Conv(n_residual_channels, 2*n_residual_channels,
-                                kernel_size=2, dilation=dilation,
-                                w_init_gain='tanh', is_causal=True)
+            # n_resid_channels and produces 2 x n_resid_channels. 
+            # One set of n_resid_channels goes to the res_layer, the second set goes to the skip layer.
+            in_layer = Conv(n_residual_channels, 2*n_residual_channels, kernel_size=2, dilation=dilation,
+                            w_init_gain='tanh', is_causal=True)
             self.dilate_layers.append(in_layer)
 
             # last one is not necessary
             if i < n_layers - 1:
                 # FJ - plain linear FFN consuming half the 2 x resid_channels
                 # proced by in_layer as input for the next in_layer
-                res_layer = Conv(n_residual_channels, n_residual_channels,
-                                     w_init_gain='linear')
+                res_layer = Conv(n_residual_channels, n_residual_channels, w_init_gain='linear')
                 self.res_layers.append(res_layer)
             # FJ skip linear FFN consuming the other half of the 2x resid_channles 
             # of in_layer for input the skip network (i.e. conv_out)
-            skip_layer = Conv(n_residual_channels, n_skip_channels,
-                                  w_init_gain='relu')
+            skip_layer = Conv(n_residual_channels, n_skip_channels, w_init_gain='relu')
             self.skip_layers.append(skip_layer)
 
     def forward(self, forward_input):
@@ -125,22 +118,25 @@ class WaveNet(torch.nn.Module):
         # FJ ; n_cond_channels to  2*n_residual_channels*n_layers tanh gated FFN
         cond_acts = self.cond_layers(cond_input)
         # resize this into batch x num_layers x 
+        # FJ What the fuck is this ? What kind of fucking clown does not fucking comment anything ?
         cond_acts = cond_acts.view(cond_acts.size(0), self.n_layers, -1, cond_acts.size(2))
         for i in range(self.n_layers):
-            # FJ dilated convolution
+            # FJ dilated convolution of the input
             in_act = self.dilate_layers[i](forward_input)
-            # FJ merge in the gating for this layer. What is this gating ?
+            # FJ merge in some conditioner bullshit. No fucking documentaiton of what the fuck this is.
             in_act = in_act + cond_acts[:,i,:,:]
+            # FJ - first n_resid_channels of output ( this goes into the resid network)
             t_act = torch.nn.functional.tanh(in_act[:, :self.n_residual_channels, :])
+            # FJ -> second set of n_resid_channels - this acts as a gating
             s_act = torch.nn.functional.sigmoid(in_act[:, self.n_residual_channels:, :])
-            # FJ: output for dilated later is out = tanh(out[:last])*sigmoid(out[last]) ... what the what?
+            # FJ: gated output of this layer
             acts = t_act * s_act
-            # FJ: do the residual layer via plain FFN 
+            # FJ: send this gated activation through the residual layer
             if i < len(self.res_layers):
                 res_acts = self.res_layers[i](acts)
-            # FJ: the skip connection - merging residual connection into the highway.
+            # FJ: Merge the residual activation into the main line of propagation
             forward_input = res_acts + forward_input
-            # compute the skip network for propagation
+            # FJ: Here merge the gated activation into the skip network propagation
             if i == 0:
                 output = self.skip_layers[i](acts)
             else:
